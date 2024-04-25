@@ -55,7 +55,5 @@ class Button(BaseEntity):
         await self.mqtt.subscribe(self.command_topic)
 
     async def handle_mqtt_message(self, topic: bytes, message):
-        await super().handle_mqtt_message(topic, message)
-
         if topic == self.command_topic and message == self.payload_press and self.on_press:
             await self.on_press()

@@ -63,15 +63,11 @@ class Switch(BaseEntity):
     async def publish_state(self):
         await super().publish_state(self.payload_on if self.is_on else self.payload_off)
 
-    async def handle_mqtt_message(self, topic: bytes, message):
-        await super().handle_mqtt_message(topic, message)
+    # TODO: handle HA start
 
+    async def handle_mqtt_message(self, topic: bytes, message):
         if topic == self.command_topic:
             await self._handle_command(message)
-
-    async def _handle_ha_start(self):
-        await super()._handle_ha_start()
-        await self.publish_state()
 
     async def _handle_command(self, raw_message):
         self.is_on = raw_message == self.payload_on

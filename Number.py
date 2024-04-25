@@ -77,8 +77,6 @@ class Number(BaseEntity):
         await super().publish_state(str(self.value))
 
     async def handle_mqtt_message(self, topic: bytes, message):
-        await super().handle_mqtt_message(topic, message)
-
         if topic == self.command_topic:
             self.value = float(message)
             await self.publish_state()

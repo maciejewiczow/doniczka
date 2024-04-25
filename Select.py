@@ -55,8 +55,6 @@ class Select(BaseEntity):
         await super().publish_state(self.value)
 
     async def handle_mqtt_message(self, topic: bytes, message):
-        await super().handle_mqtt_message(topic, message)
-
         if topic == self.command_topic:
             self.value = message
             await self.publish_state()

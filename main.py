@@ -45,6 +45,7 @@ client = MQTTClient(
 )
 
 device = Device(
+    mqtt=client,
     manufacturer=b'DIY',
     model=b'Raspberry Pi PICO',
     name=b'Autowatering flower pot',
@@ -154,6 +155,7 @@ async def init_mqtt_devices():
     await setAirMoistureReferenceButton.init_mqtt()
     await setWaterMoistureReferenceButton.init_mqtt()
     await targetMoistureLevelHANumber.init_mqtt()
+    await device.init_mqtt()
 
 async def mqtt_up_watcher():
     await client.connect() # type:ignore
@@ -173,6 +175,7 @@ async def mqtt_up_watcher():
 async def mqtt_messages_handler():
     async for topic, msg, retained in client.queue: # type: ignore
         print('Message received', topic, msg)
+        await device.handle_mqtt_message(topic, msg)
         await wateringSwitch.handle_mqtt_message(topic, msg)
         await modeSelect.handle_mqtt_message(topic, msg)
         await setAirMoistureReferenceButton.handle_mqtt_message(topic, msg)
