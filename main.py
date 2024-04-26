@@ -52,6 +52,17 @@ device = Device(
     device_id=b'autowatering-flower-pot'
 )
 
+def triggerWaterPump(value: bool):
+    if isWaterLevelLow or modeSelect.value == 'Automatic':
+        return False
+
+    if value:
+        waterPumpPin.on()
+    else:
+        waterPumpPin.off()
+
+    return True
+
 wateringSwitch = Switch(
     mqtt=client,
     name=b'Water pump',
@@ -59,6 +70,7 @@ wateringSwitch = Switch(
     device_class=b'switch',
     object_id=b'flower-pot-water-pump',
     icon=b"mdi:water-pump",
+    on_change=triggerWaterPump
 )
 
 lowWaterLevelSensor = BinarySensor(
@@ -71,8 +83,13 @@ lowWaterLevelSensor = BinarySensor(
     icon=b'mdi:water-alert'
 )
 
-def updateSavedMode(value: bytes):
+async def updateSavedMode(value: bytes):
     data['mode'] = value.decode()
+
+    if value == b'Manual':
+        wateringSwitch.is_on = False
+        await wateringSwitch.publish_state()
+        waterPumpPin.off()
 
 modeSelect = Select(
     mqtt=client,
@@ -158,13 +175,6 @@ async def init_mqtt_devices():
     await device.init_mqtt()
 
 async def mqtt_up_watcher():
-    await client.connect() # type:ignore
-    print('Connected to mqtt')
-
-    await init_mqtt_devices()
-
-    print('Mqtt devices initialized')
-
     while True:
         await client.up.wait() # type:ignore
 
@@ -188,28 +198,87 @@ async def main():
 
     print(f'Connected to "{ssid}" with ip {ip}')
 
+    await client.connect() # type:ignore
+    print('Connected to mqtt')
+
+    await init_mqtt_devices()
+
+    print('Mqtt devices initialized')
+
     await uasyncio.gather(mqtt_up_watcher(), mqtt_messages_handler(), hardwareMain()) # type:ignore
 
-async def waterSwitchHandler():
-    while True:
-        if wateringSwitch.is_on:
-            waterPumpPin.on()
-        else:
-            waterPumpPin.off()
+lastIsWaterLevelLow = None
+isWaterLevelLow = True
 
-        await uasyncio.sleep_ms(500)
-
-lastIsHigh = None
 async def waterLevelWatcher():
-    global lastIsHigh
+    global lastIsWaterLevelLow
+    global isWaterLevelLow
     while True:
-        isHigh = lowWaterLevelSensorPin.value() == 1
+        isWaterLevelLow = lowWaterLevelSensorPin.value() == 1
 
-        if lastIsHigh != isHigh:
-            await lowWaterLevelSensor.publish_state(isHigh)
+        if lastIsWaterLevelLow != isWaterLevelLow:
+            await lowWaterLevelSensor.publish_state(isWaterLevelLow)
+            waterPumpPin.off()
+            wateringSwitch.is_on = False
+            await wateringSwitch.publish_state()
 
-        lastIsHigh = isHigh
+        lastIsWaterLevelLow = isWaterLevelLow
         await uasyncio.sleep_ms(700)
+
+moistureLowerThreshold = 5
+moistureOvershoot = 5
+
+oldHysteresisResult = False
+def hysteresis(value: float):
+    global oldHysteresisResult
+
+    result = False
+
+    maxVal = targetMoistureLevelHANumber.value + moistureOvershoot
+    minVal = targetMoistureLevelHANumber.value - moistureLowerThreshold
+
+    if value > maxVal:
+        result = False
+    elif value < minVal:
+        result = True
+    else:
+        result = oldHysteresisResult
+
+    oldHysteresisResult = result
+    return result
+
+lastOn = False
+async def autoModeLoop():
+    global isWaterLevelLow
+    global moistureLowerThreshold
+    global moistureOvershoot
+    global lastOn
+
+    while True:
+        await uasyncio.sleep_ms(200)
+
+        if isWaterLevelLow:
+            continue
+
+        if modeSelect.value != 'Automatic':
+            lastOn = False
+            continue
+
+        if moistureReading is None:
+            continue
+
+        hysteresisValue = hysteresis(moistureReading)
+
+        if hysteresisValue and not lastOn:
+            waterPumpPin.on()
+            wateringSwitch.is_on = True
+            await wateringSwitch.publish_state()
+            lastOn = True
+        elif not hysteresisValue and lastOn:
+            waterPumpPin.off()
+            wateringSwitch.is_on = False
+            await wateringSwitch.publish_state()
+            lastOn = False
 
 async def moistureReadingWatcher():
     global moistureReading
@@ -222,6 +291,6 @@ async def moistureReadingWatcher():
         await uasyncio.sleep_ms(1000)
 
 async def hardwareMain():
-    await uasyncio.gather(waterSwitchHandler(), moistureReadingWatcher(), waterLevelWatcher()) # type:ignore
+    await uasyncio.gather(moistureReadingWatcher(), waterLevelWatcher(), autoModeLoop()) # type:ignore
 
 uasyncio.run(main())

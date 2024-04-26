@@ -19,8 +19,10 @@ class Switch(BaseEntity):
         unique_id = None,
         node_id=None,
         discovery_prefix=b'homeassistant',
-        extra_conf=None
+        extra_conf=None,
+        on_change=None
     ):
+        self.on_change = on_change
         config = {}
 
         if device_class:
@@ -70,5 +72,14 @@ class Switch(BaseEntity):
             await self._handle_command(message)
 
     async def _handle_command(self, raw_message):
-        self.is_on = raw_message == self.payload_on
-        await self.publish_state()
+        newIsOn = raw_message == self.payload_on
+
+        if self.is_on != newIsOn:
+            doPublish = True
+            if self.on_change:
+                doPublish = self.on_change(newIsOn)
+
+            if doPublish:
+                await super().publish_state(self.payload_on if newIsOn else self.payload_off)
+
+        self.is_on = newIsOn

@@ -60,4 +60,4 @@ class Select(BaseEntity):
             await self.publish_state()
 
             if self.on_change:
-                self.on_change(self.value)
+                await self.on_change(self.value)
