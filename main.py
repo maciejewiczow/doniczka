@@ -20,7 +20,7 @@ data = FileSyncedDict(
         'airMoistureReading': None,
         'waterMoistureReading': None,
         'targetMoisture': None,
-        'mode': "Automatic"
+        'mode': 'Manual'
     }
 )
 
