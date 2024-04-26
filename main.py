@@ -245,8 +245,6 @@ def hysteresis(value: float):
     maxVal = min(targetMoistureLevelHANumber.value + moistureOvershoot, 100)
     minVal = max(targetMoistureLevelHANumber.value - moistureLowerThreshold, 0)
 
-    print(minVal, clamped, maxVal)
-
     if clamped > maxVal:
         return False
     elif clamped < minVal:
