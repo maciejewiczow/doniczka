@@ -28,6 +28,15 @@ waterPumpPin = Pin(22, Pin.OUT)
 lowWaterLevelSensorPin = Pin(21, Pin.IN, Pin.PULL_UP)
 moistureSensorPin = ADC(Pin(28))
 
+def clamp(x, min, max):
+    if x >= max:
+        return max
+
+    if x <= min:
+        return min
+
+    return x
+
 def map_range(x, src, dest):
     src_min, src_max = src
     dest_min, dest_max = dest
@@ -228,30 +237,28 @@ async def waterLevelWatcher():
 moistureLowerThreshold = 5
 moistureOvershoot = 5
 
-oldHysteresisResult = False
 def hysteresis(value: float):
-    global oldHysteresisResult
+    global targetMoistureLevelHANumber
 
-    result = False
+    clamped = clamp(value, 0, 100)
 
-    maxVal = targetMoistureLevelHANumber.value + moistureOvershoot
-    minVal = targetMoistureLevelHANumber.value - moistureLowerThreshold
+    maxVal = min(targetMoistureLevelHANumber.value + moistureOvershoot, 100)
+    minVal = max(targetMoistureLevelHANumber.value - moistureLowerThreshold, 0)
 
-    if value > maxVal:
-        result = False
-    elif value < minVal:
-        result = True
-    else:
-        result = oldHysteresisResult
+    print(minVal, clamped, maxVal)
 
-    oldHysteresisResult = result
-    return result
+    if clamped > maxVal:
+        return False
+    elif clamped < minVal:
+        return  True
+
 
 lastOn = False
 async def autoModeLoop():
     global isWaterLevelLow
     global moistureLowerThreshold
     global moistureOvershoot
+    global moistureReading
     global lastOn
 
     while True:
@@ -267,18 +274,23 @@ async def autoModeLoop():
         if moistureReading is None:
             continue
 
+
         hysteresisValue = hysteresis(moistureReading)
 
-        if hysteresisValue and not lastOn:
+        if hysteresisValue == True:
             waterPumpPin.on()
-            wateringSwitch.is_on = True
-            await wateringSwitch.publish_state()
-            lastOn = True
-        elif not hysteresisValue and lastOn:
+
+            if not lastOn:
+                wateringSwitch.is_on = True
+                await wateringSwitch.publish_state()
+                lastOn = True
+        elif hysteresisValue == False:
             waterPumpPin.off()
-            wateringSwitch.is_on = False
-            await wateringSwitch.publish_state()
-            lastOn = False
+
+            if lastOn:
+                wateringSwitch.is_on = False
+                await wateringSwitch.publish_state()
+                lastOn = False
 
 async def moistureReadingWatcher():
     global moistureReading
