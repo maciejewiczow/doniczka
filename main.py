@@ -1,12 +1,13 @@
 from AveragingThrottledSensor import AveragingThrottledSensor
 from Button import Button
 from FileSyncedDict import FileSyncedDict
+from Led import Led, LedState
 from Number import Number
 from Select import Select
 from Switch import Switch
 from lib.ha_mqtt_device import BinarySensor, Device
 from lib.lib.mqtt_as import MQTTClient
-from lib.wifiConfig.tryConnectingToKnownNetworks import tryConnectingToKnownNetworks
+from lib.wifiConfig.tryConnectingToKnownNetworks import startConfigurationAP, tryConnectingToKnownNetworks
 import uasyncio
 from secrets import mqtt_password, mqtt_user
 from machine import Pin, ADC
@@ -27,6 +28,10 @@ data = FileSyncedDict(
 waterPumpPin = Pin(22, Pin.OUT)
 lowWaterLevelSensorPin = Pin(21, Pin.IN, Pin.PULL_UP)
 moistureSensorPin = ADC(Pin(28))
+
+powerLed = Led(Pin(6, Pin.OUT), LedState.on)
+wifiLed = Led(Pin(7, Pin.OUT), LedState.flashing)
+errorLed = Led(Pin(8, Pin.OUT))
 
 def clamp(x, min, max):
     if x >= max:
@@ -61,14 +66,22 @@ device = Device(
     device_id=b'autowatering-flower-pot'
 )
 
+def beginWatering():
+    waterPumpPin.on()
+    powerLed.flash()
+
+def endWatering():
+    waterPumpPin.off()
+    powerLed.on()
+
 def triggerWaterPump(value: bool):
     if isWaterLevelLow or modeSelect.value == 'Automatic':
         return False
 
     if value:
-        waterPumpPin.on()
+        beginWatering()
     else:
-        waterPumpPin.off()
+        endWatering()
 
     return True
 
@@ -98,7 +111,7 @@ async def updateSavedMode(value: bytes):
     if value == b'Manual':
         wateringSwitch.is_on = False
         await wateringSwitch.publish_state()
-        waterPumpPin.off()
+        endWatering()
 
 modeSelect = Select(
     mqtt=client,
@@ -185,11 +198,19 @@ async def init_mqtt_devices():
 
 async def mqtt_up_watcher():
     while True:
+        await client.down.wait() # type:ignore
+        print('Disconnected from wifi/mqtt')
+        wifiLed.flash(500)
+        client.down.clear()
         await client.up.wait() # type:ignore
+        print('Reconnected')
 
         await init_mqtt_devices()
 
+        print('Mqtt devices reinitialized')
+
         client.up.clear()
+        wifiLed.on()
 
 async def mqtt_messages_handler():
     async for topic, msg, retained in client.queue: # type: ignore
@@ -202,19 +223,38 @@ async def mqtt_messages_handler():
         await targetMoistureLevelHANumber.handle_mqtt_message(topic, msg)
 
 async def main():
+    ledsTask = uasyncio.create_task(uasyncio.gather(
+        powerLed.loop(),
+        wifiLed.loop(),
+        errorLed.loop()
+    )) # type:ignore
+
     ip, ssid, _ = await tryConnectingToKnownNetworks(apName="Smart plant pot", domain="config.smart-pot")
     gc.collect()
 
     print(f'Connected to "{ssid}" with ip {ip}')
 
-    await client.connect() # type:ignore
-    print('Connected to mqtt')
+    while True:
+        try:
+            await client.connect() # type:ignore
+            print('Connected to mqtt')
 
-    await init_mqtt_devices()
+            await init_mqtt_devices()
 
-    print('Mqtt devices initialized')
+            print('Mqtt devices initialized')
+            wifiLed.on()
 
-    await uasyncio.gather(mqtt_up_watcher(), mqtt_messages_handler(), hardwareMain()) # type:ignore
+            await uasyncio.gather(mqtt_up_watcher(), mqtt_messages_handler(), hardwareMain(), ledsTask) # type:ignore
+        except Exception as e:
+            print(e)
+            errorLed.flash(500)
+            ledTask = uasyncio.create_task(errorLed.loop())
+            gc.collect()
+            print('Starting the config AP again after connection error')
+            ip, ssid, _ = await startConfigurationAP(apName="Smart plant pot", domain="config.smart-pot")
+            print(f'Connected to new network "{ssid}" with ip {ip}')
+            gc.collect()
+            ledTask.cancel() #type:ignore
 
 lastIsWaterLevelLow = None
 isWaterLevelLow = True
@@ -227,7 +267,13 @@ async def waterLevelWatcher():
 
         if lastIsWaterLevelLow != isWaterLevelLow:
             await lowWaterLevelSensor.publish_state(isWaterLevelLow)
-            waterPumpPin.off()
+
+            if isWaterLevelLow:
+                errorLed.flash()
+            else:
+                errorLed.off()
+
+            endWatering()
             wateringSwitch.is_on = False
             await wateringSwitch.publish_state()
 
@@ -250,7 +296,6 @@ def hysteresis(value: float):
     elif clamped < minVal:
         return  True
 
-
 lastOn = False
 async def autoModeLoop():
     global isWaterLevelLow
@@ -272,18 +317,17 @@ async def autoModeLoop():
         if moistureReading is None:
             continue
 
-
         hysteresisValue = hysteresis(moistureReading)
 
         if hysteresisValue == True:
-            waterPumpPin.on()
+            beginWatering()
 
             if not lastOn:
                 wateringSwitch.is_on = True
                 await wateringSwitch.publish_state()
                 lastOn = True
         elif hysteresisValue == False:
-            waterPumpPin.off()
+            endWatering()
 
             if lastOn:
                 wateringSwitch.is_on = False
@@ -301,6 +345,10 @@ async def moistureReadingWatcher():
         await uasyncio.sleep_ms(1000)
 
 async def hardwareMain():
-    await uasyncio.gather(moistureReadingWatcher(), waterLevelWatcher(), autoModeLoop()) # type:ignore
+    await uasyncio.gather(
+        moistureReadingWatcher(),
+        waterLevelWatcher(),
+        autoModeLoop()
+    ) # type:ignore
 
 uasyncio.run(main())
