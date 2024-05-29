@@ -62,8 +62,13 @@ class Switch(BaseEntity):
         await self.mqtt.subscribe(self.command_topic)
         await self.publish_state()
 
-    async def publish_state(self):
-        await super().publish_state(self.payload_on if self.is_on else self.payload_off)
+    async def publish_state(self, is_on = None):
+        if is_on == None:
+            is_on = self.is_on
+        else:
+            self.is_on = is_on
+
+        await super().publish_state(self.payload_on if is_on else self.payload_off)
 
     # TODO: handle HA start
 

@@ -108,9 +108,8 @@ lowWaterLevelSensor = BinarySensor(
 async def updateSavedMode(value: bytes):
     data['mode'] = value.decode()
 
-    if value == b'Manual':
-        wateringSwitch.is_on = False
-        await wateringSwitch.publish_state()
+    if value != b'Automatic':
+        await wateringSwitch.publish_state(False)
         endWatering()
 
 modeSelect = Select(
@@ -121,6 +120,7 @@ modeSelect = Select(
     object_id=b'flower-pot-operation-mode-select',
     options=[
         b'Automatic',
+        b'Semi-automatic',
         b'Manual'
     ],
     on_change=updateSavedMode
@@ -247,14 +247,14 @@ async def main():
             await uasyncio.gather(mqtt_up_watcher(), mqtt_messages_handler(), hardwareMain(), ledsTask) # type:ignore
         except Exception as e:
             print(e)
-            errorLed.flash(500)
-            ledTask = uasyncio.create_task(errorLed.loop())
+            errorLed.flash(periodMs=500)
+            errorLedTask = uasyncio.create_task(errorLed.loop())
             gc.collect()
             print('Starting the config AP again after connection error')
             ip, ssid, _ = await startConfigurationAP(apName="Smart plant pot", domain="config.smart-pot")
             print(f'Connected to new network "{ssid}" with ip {ip}')
             gc.collect()
-            ledTask.cancel() #type:ignore
+            errorLedTask.cancel() #type:ignore
 
 lastIsWaterLevelLow = None
 isWaterLevelLow = True
@@ -274,8 +274,7 @@ async def waterLevelWatcher():
                 errorLed.off()
 
             endWatering()
-            wateringSwitch.is_on = False
-            await wateringSwitch.publish_state()
+            await wateringSwitch.publish_state(False)
 
         lastIsWaterLevelLow = isWaterLevelLow
         await uasyncio.sleep_ms(700)
@@ -283,8 +282,35 @@ async def waterLevelWatcher():
 moistureLowerThreshold = 5
 moistureOvershoot = 5
 
+async def semiAutoModeLoop():
+    global targetMoistureLevelHANumber
+    global isWaterLevelLow
+    global moistureReading
+    global moistureOvershoot
+
+    while True:
+        await uasyncio.sleep_ms(500)
+
+        if isWaterLevelLow:
+            continue
+
+        if modeSelect.value != 'Semi-automatic':
+            continue
+
+        if moistureReading is None:
+            continue
+
+        if wateringSwitch.is_on:
+            beginWatering()
+            while moistureReading < targetMoistureLevelHANumber.value + moistureOvershoot:
+                await uasyncio.sleep_ms(800)
+            endWatering()
+            await wateringSwitch.publish_state(is_on=False)
+
 def hysteresis(value: float):
     global targetMoistureLevelHANumber
+    global moistureOvershoot
+    global moistureLowerThreshold
 
     clamped = clamp(value, 0, 100)
 
@@ -295,12 +321,12 @@ def hysteresis(value: float):
         return False
     elif clamped < minVal:
         return  True
+    else:
+        return None
 
 lastOn = False
 async def autoModeLoop():
     global isWaterLevelLow
-    global moistureLowerThreshold
-    global moistureOvershoot
     global moistureReading
     global lastOn
 
@@ -323,15 +349,13 @@ async def autoModeLoop():
             beginWatering()
 
             if not lastOn:
-                wateringSwitch.is_on = True
-                await wateringSwitch.publish_state()
+                await wateringSwitch.publish_state(is_on=True)
                 lastOn = True
         elif hysteresisValue == False:
             endWatering()
 
             if lastOn:
-                wateringSwitch.is_on = False
-                await wateringSwitch.publish_state()
+                await wateringSwitch.publish_state(is_on=False)
                 lastOn = False
 
 async def moistureReadingWatcher():
@@ -348,7 +372,8 @@ async def hardwareMain():
     await uasyncio.gather(
         moistureReadingWatcher(),
         waterLevelWatcher(),
-        autoModeLoop()
+        autoModeLoop(),
+        semiAutoModeLoop()
     ) # type:ignore
 
 uasyncio.run(main())
