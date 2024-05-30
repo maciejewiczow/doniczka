@@ -75,7 +75,7 @@ def endWatering():
     powerLed.on()
 
 def triggerWaterPump(value: bool):
-    if isWaterLevelLow or modeSelect.value == 'Automatic':
+    if isWaterLevelLow or modeSelect.value != 'Manual':
         return False
 
     if value:
